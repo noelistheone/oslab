@@ -288,6 +288,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -304,6 +305,7 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
+  np->mask = p->mask;
 
   release(&np->lock);
 
@@ -653,4 +655,17 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64
+count_process(void)
+{
+  uint64 cnt=0;
+  for(struct proc *count = proc; count < &proc[NPROC]; count++){
+    //不需要锁进程proc结构，因为我们只需要读取进程列表，不需要写
+    if(count->state != UNUSED){//不是UNUSED的进程位，就是已经分配的
+      cnt++;
+    }
+  }
+  return cnt;
 }
