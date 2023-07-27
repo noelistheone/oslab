@@ -126,6 +126,12 @@ found:
     release(&p->lock);
     return 0;
   }
+  if (0 == (p->ucall = (struct usyscall*)kalloc()))//需要对该成员分配内存，也是在该函数中对proc的成员分配好内存后，才调用proc_pagetable()函数映射的 
+  {
+	  freeproc(p);
+	  release(&p->lock);
+	  return 0;
+  }
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -140,6 +146,7 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  p->ucall->pid = p->pid;//对ucall的成员进行赋值
 
   return p;
 }
@@ -155,6 +162,9 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if (p->ucall)
+	  kfree((void*)p->ucall);
+  p->ucall = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -195,6 +205,12 @@ proc_pagetable(struct proc *p)
     uvmfree(pagetable, 0);
     return 0;
   }
+  if (mappages(pagetable,USYSCALL,PGSIZE,(uint64)(p->ucall),
+                 PTE_U | PTE_R) < 0)
+  {
+	  uvmfree(pagetable,0);
+	  return 0;
+  }
 
   return pagetable;
 }
@@ -206,6 +222,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 0);
   uvmfree(pagetable, sz);
 }
 
