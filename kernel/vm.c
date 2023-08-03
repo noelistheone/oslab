@@ -303,25 +303,36 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
-
+  // char *mem;
+ 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    // 清空页表项中的PTE_W
+    *pte &= ~PTE_W;
+    *pte |= PTE_COW;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // 这里没有申请新的物理页 没有必要释放pa
+    // 将原来的物理页直接映射到子进程的页表中 标志位设置不可写 COW
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       goto err;
     }
+    addref(pa);
+    // 
+    // 注释分配一个物理页的代码
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
   }
   return 0;
-
+ 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
@@ -347,9 +358,26 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
-
+ 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    pte_t *pte;
+    if (va0 >= MAXVA)
+    {
+      return -1;
+    }
+    
+    if ((pte=walk(pagetable,va0,0))==0)
+    {
+      return -1;
+    }
+    if (*pte & PTE_COW)
+    {
+      if(handler_cow_pagefault(pagetable, va0)<0)
+      {
+        return -1;
+      }
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -357,7 +385,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(n > len)
       n = len;
     memmove((void *)(pa0 + (dstva - va0)), src, n);
-
+ 
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
@@ -431,4 +459,35 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int
+handler_cow_pagefault(pagetable_t pagetable, uint64 va)
+{
+  // 取出原来无法翻译的va地址
+  if (va >= MAXVA)
+    return -1;
+  
+  pte_t *pte=walk(pagetable, va, 0);
+ 
+  if (pte == 0 || (*pte & PTE_COW)==0)
+    return -1;
+ 
+  uint64 pa=PTE2PA(*pte);
+  
+  // 分配一个新的物理页 将原来物理页中内容拷贝至新物理页
+  pagetable_t new_page=(pte_t*)kalloc();
+  if (new_page==0)
+    return -1;
+  
+  memmove((char*)new_page, (char*)pa, PGSIZE);
+  // 减少原来物理页引用计数
+  kfree((void*)pa);
+  // 将新的物理页映射至页表中 去除COW位 加上write位
+  pte_t flags=PTE_FLAGS(*pte);
+  flags &= ~PTE_COW;
+  flags |= PTE_W;
+  // printf("In cow set:   cow:%d  w:%d\n",flags&PTE_COW, flags&PTE_W);
+  *pte=PA2PTE(new_page) | flags;
+  return 0;
 }
