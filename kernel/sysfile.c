@@ -314,6 +314,33 @@ sys_open(void)
       end_op();
       return -1;
     }
+    if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW))
+	{
+		int i = 0;
+		char src_path[MAXPATH];
+		while (ip->type == T_SYMLINK)
+		{
+            // 读取软连接中的信息
+			if (readi(ip, 0, (uint64)src_path, 0, MAXPATH) != MAXPATH)
+				panic("open:readi");
+			iunlockput(ip);
+            // 找到软连接指向文件的inode
+			if ((ip = namei(src_path)) == 0)
+			{
+				end_op();
+				return -1;
+			}
+			ilock(ip);
+            // 超过10次循环就默认有环，返回错误
+			if (++i > 10)
+			{
+				iunlockput(ip);
+				end_op();
+				return -1;
+			}
+		}
+	}
+
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
@@ -484,3 +511,27 @@ sys_pipe(void)
   }
   return 0;
 }
+
+///////////////////
+uint64 
+sys_symlink(void)
+{
+	char path[MAXPATH], target[MAXPATH];
+	begin_op();
+	if (argstr(0, path, MAXPATH) < 0 || argstr(1, target, MAXPATH) < 0 )
+		goto bad;
+    // create函数会检测是否已经存在target，存在返回0
+	struct inode* ip = create(target, T_SYMLINK, 0, 0);
+	if (0 == ip)
+		goto bad;
+    // 将path的路径作为信息写入target中，open时用的就是这个信息
+	if (writei(ip, 0, (uint64)path, 0, MAXPATH) != MAXPATH)
+		panic("symlink:writei");
+	iunlockput(ip);
+	end_op();
+	return 0;
+bad:
+	end_op();
+	return -1;
+}
+
