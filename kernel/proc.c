@@ -280,7 +280,8 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
-
+  
+  
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -300,6 +301,10 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+  
+
+  
+
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -313,6 +318,12 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  /** 子进程要拷贝父进程的 vmas */
+  for(int i=0; i<NVMA; i++) {
+    memmove(&np->vmas[i], &p->vmas[i], sizeof(p->vmas[i]));
+    if(p->vmas[i].file)
+      filedup(p->vmas[i].file);
+  }
   release(&np->lock);
 
   return pid;
@@ -351,6 +362,9 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+  for(int i=0; i<NVMA; i++) {
+    uvmunmap(p->pagetable, p->vmas[i].addr, p->vmas[i].len/PGSIZE, 1);
   }
 
   begin_op();
